@@ -5,7 +5,7 @@ node_modules/
 .env
 
 # Build output (generated config)
-frontend/js/config.js
+
 
 # OS files
 .DS_Store
