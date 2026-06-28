@@ -5,6 +5,9 @@ const BACKEND_URL = window.BACKEND_URL;
 let currentUser = null;
 let selectedProjectId = null;
 let isEditing = false;
+let currentDummyData = {};
+let currentSchemaTables = [];           // simple list of table names
+let currentProjectSchema = null;       // full tables array from schema (for column info)
 
 // ============================
 //  AUTH SCREEN SWITCHING
@@ -147,6 +150,8 @@ window.showCreateProject = function() {
   document.getElementById('form-submit-btn').onclick = createProject;
   document.getElementById('project-name').value = '';
   document.getElementById('project-db-type').value = 'mysql';
+  document.getElementById('dummy-mode-section').style.display = 'block';
+  document.getElementById('dummy-mode').value = 'auto';
   document.getElementById('tables-container').innerHTML = '';
   addTable();
   document.getElementById('create-project-form').classList.remove('hidden');
@@ -190,8 +195,15 @@ window.createProject = async function() {
   const tables = collectSchemaFromForm();
   if (tables.length === 0) return alert('Add at least one table with columns');
   const schema = { db_type, tables };
+  const dummyMode = document.getElementById('dummy-mode').value;
+
   try {
-    await api('/projects', 'POST', { name, db_type, schema_json: schema });
+    await api('/projects', 'POST', {
+      name,
+      db_type,
+      schema_json: schema,
+      dummy_mode: dummyMode
+    });
     hideCreateProject();
     loadProjects();
   } catch (err) {
@@ -204,6 +216,7 @@ window.editSelectedProject = async function() {
   try {
     const project = await api(`/projects/${selectedProjectId}`);
     isEditing = true;
+    document.getElementById('dummy-mode-section').style.display = 'none';
     document.getElementById('form-title').textContent = 'Edit Project';
     document.getElementById('form-submit-btn').textContent = 'Update Project';
     document.getElementById('form-submit-btn').onclick = updateProject;
@@ -288,7 +301,6 @@ window.deleteSelectedProject = async function() {
 // ============================
 window.showCopyDialog = async function() {
   if (!selectedProjectId) return;
-  // Pre‑fill the input with a default name: "OriginalName (copy)"
   const select = document.getElementById('project-select');
   const selectedText = select.options[select.selectedIndex]?.text || '';
   const originalName = selectedText.split(' (')[0] || 'Project';
@@ -380,13 +392,10 @@ function displayQueries(queries) {
     return;
   }
 
-
-
   queries.forEach((q, idx) => {
     const card = document.createElement('div');
     card.className = 'card bg-white p-4 rounded-lg shadow-md';
     
-    // For the first option, add a "Recommended" badge
     const badge = idx === 0 
       ? `<span class="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full font-semibold">⭐ Recommended</span>` 
       : '';
@@ -394,13 +403,11 @@ function displayQueries(queries) {
     card.innerHTML = `
       <div class="flex justify-between items-start">
         <h3 class="font-semibold text-lg">Option ${idx + 1} ${badge}</h3>
-        <span class="text-sm bg-gray-200 px-2 py-1 rounded">${q.impact?.type || 'SELECT'}</span>
       </div>
       <pre class="bg-gray-100 p-2 rounded my-2 text-sm overflow-x-auto">${escapeHtml(q.sql)}</pre>
       <p class="text-gray-700"><strong>Explanation:</strong> ${q.explanation}</p>
       <p class="text-sm text-gray-600">Tables: ${(q.tables || []).join(', ') || 'N/A'}</p>
       <p class="text-sm text-gray-600">Columns: ${(q.attributes || []).join(', ') || 'N/A'}</p>
-      
       ${q.warnings?.length ? `<p class="text-orange-600 text-sm">⚠️ ${q.warnings.join('; ')}</p>` : ''}
       ${q.optimizations?.length ? `<p class="text-blue-600 text-sm">💡 ${q.optimizations.join('; ')}</p>` : ''}
       <button onclick="window.executeQuery(\`${escapeSql(q.sql)}\`)" class="mt-2 bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700 text-sm">Execute</button>
@@ -438,18 +445,15 @@ window.executeQuery = async function(sql) {
 // ============================
 //  DUMMY DATA MANAGER
 // ============================
-
-let currentDummyData = {};
-let currentSchemaTables = [];   
 window.showDummyManager = async function() {
   if (!selectedProjectId) return;
   try {
     const project = await api(`/projects/${selectedProjectId}`);
     currentDummyData = project.dummy_data || {};
-    // Store table names from the schema for CSV upload
-    currentSchemaTables = (project.schema_json && project.schema_json.tables)
-      ? project.schema_json.tables.map(t => t.name)
-      : [];
+    // Store full schema for column info
+    currentProjectSchema = project.schema_json?.tables || [];
+    // Simple name list for CSV upload
+    currentSchemaTables = currentProjectSchema.map(t => t.name);
     renderDummyTables();
     document.getElementById('dummy-manager').classList.remove('hidden');
   } catch (err) {
@@ -464,26 +468,34 @@ window.closeDummyManager = function() {
 function renderDummyTables() {
   const container = document.getElementById('dummy-tables-container');
   container.innerHTML = '';
-  if (Object.keys(currentDummyData).length === 0) {
-    container.innerHTML = '<p class="text-gray-500">No dummy data available.</p>';
+
+  if (!currentProjectSchema || currentProjectSchema.length === 0) {
+    container.innerHTML = '<p class="text-gray-500">No tables defined in this project.</p>';
     return;
   }
-  for (const [tableName, rows] of Object.entries(currentDummyData)) {
-    if (!rows.length) continue;
+
+  // Loop through schema tables, not dummy data keys
+  currentProjectSchema.forEach(tableDef => {
+    const tableName = tableDef.name;
+    const rows = currentDummyData[tableName] || [];
+    const columns = tableDef.columns.map(c => c.name);
+
     const tableDiv = document.createElement('div');
     tableDiv.className = 'mb-6';
     tableDiv.innerHTML = `<h3 class="font-semibold text-lg mb-2">${tableName} (${rows.length} rows)</h3>`;
+
     const table = document.createElement('table');
     table.className = 'min-w-full border mb-2';
-    const columns = Object.keys(rows[0]);
-    table.innerHTML = `
-      <thead>
-        <tr>
-          ${columns.map(c => `<th class="border p-2 bg-gray-100">${c}</th>`).join('')}
-          <th class="border p-2 bg-gray-100">Actions</th>
-        </tr>
-      </thead>
-    `;
+
+    // Table header
+    const thead = document.createElement('thead');
+    thead.innerHTML = `
+      <tr>
+        ${columns.map(c => `<th class="border p-2 bg-gray-100">${c}</th>`).join('')}
+        <th class="border p-2 bg-gray-100">Actions</th>
+      </tr>`;
+    table.appendChild(thead);
+
     const tbody = document.createElement('tbody');
     rows.forEach((row, idx) => {
       const tr = document.createElement('tr');
@@ -495,23 +507,39 @@ function renderDummyTables() {
     });
     table.appendChild(tbody);
     tableDiv.appendChild(table);
-    tableDiv.innerHTML += `<button onclick="addDummyRow('${tableName}')" class="text-blue-600 text-sm">+ Add Row</button>`;
+
+    // Add Row button (works even if no rows exist)
+    const addBtn = document.createElement('button');
+    addBtn.className = 'text-blue-600 text-sm mt-1';
+    addBtn.textContent = '+ Add Row';
+    addBtn.onclick = () => addDummyRow(tableName);
+    tableDiv.appendChild(addBtn);
+
     container.appendChild(tableDiv);
-  }
+  });
 }
 
 window.deleteDummyRow = function(tableName, idx) {
   if (confirm('Delete this row?')) {
-    currentDummyData[tableName].splice(idx, 1);
+    if (currentDummyData[tableName]) {
+      currentDummyData[tableName].splice(idx, 1);
+    }
     renderDummyTables();
   }
 };
 
 window.addDummyRow = function(tableName) {
-  if (!currentDummyData[tableName] || !currentDummyData[tableName].length) return;
-  const sample = currentDummyData[tableName][0];
+  // Find table definition in schema to get column names
+  const tableDef = currentProjectSchema?.find(t => t.name === tableName);
+  if (!tableDef) return;
+
+  const columns = tableDef.columns.map(c => c.name);
   const newRow = {};
-  Object.keys(sample).forEach(col => newRow[col] = null);
+  columns.forEach(col => { newRow[col] = null; });
+
+  if (!currentDummyData[tableName]) {
+    currentDummyData[tableName] = [];
+  }
   currentDummyData[tableName].push(newRow);
   renderDummyTables();
 };
@@ -548,13 +576,11 @@ window.handleCSVUpload = function(event) {
       return obj;
     });
 
-    // Use the schema tables list, not dummy data keys
     const tables = currentSchemaTables;
     if (tables.length === 0) return alert('No tables defined in this project. Please add tables first.');
 
     const tableName = prompt('Which table does this CSV belong to?', tables[0]);
     if (tableName && tables.includes(tableName)) {
-      // Assign rows to the chosen table (creates it in currentDummyData if missing)
       currentDummyData[tableName] = rows;
       renderDummyTables();
     } else {

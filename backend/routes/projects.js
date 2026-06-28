@@ -8,13 +8,23 @@ const { generateDummyData } = require('../utils/virtualDB');
 
 router.use(authenticate);
 
+
+
+
 // Create project (also generates initial dummy data)
 router.post('/', userRateLimiter, async (req, res) => {
   try {
-    const { name, db_type, schema_json } = req.body;
+    const { name, db_type, schema_json, dummy_mode } = req.body;
     validateSchema(schema_json);
-    // Generate initial dummy data
-    const dummyData = generateDummyData(schema_json);
+
+    let dummyData = {};
+    if (dummy_mode === 'empty') {
+      dummyData = {};
+    } else {
+      // default 'auto' or any other value
+      dummyData = generateDummyData(schema_json);
+    }
+
     const { data, error } = await supabaseAdmin
       .from('projects')
       .insert({
@@ -32,6 +42,10 @@ router.post('/', userRateLimiter, async (req, res) => {
     res.status(400).json({ error: err.message });
   }
 });
+
+
+
+
 
 // List user's projects
 router.get('/', async (req, res) => {
